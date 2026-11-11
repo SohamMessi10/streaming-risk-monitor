@@ -40,7 +40,7 @@ def outcome(result, seq):
 def test_a_jump_is_detected_by_the_return_at_its_seq():
     result = replay(walk(jumps={100}), QUIET, RULE, truth(100))
     assert [a.seq for a in result.alerts] == [100]
-    assert outcome(result, 100) == {"symbol": "A", "seq": 100, "sigmas": 10.0, "result": "detected",
+    assert outcome(result, 100) == {"symbol": "A", "seq": 100, "time": 0, "sigmas": 10.0, "result": "detected",
                                     "covered_by_seq": 100, "z": pytest.approx(result.alerts[0].z, abs=1e-3)}
     ev = evaluation(result)
     assert (ev["detected"], ev["false_alerts"], ev["recall"], ev["precision"]) == (1, 0, 1.0, 1.0)
@@ -62,7 +62,7 @@ def test_a_jump_never_released_is_missed_as_not_released():
     events = walk(n=120)
     late = Event(time=50_000, seq=500, symbol="A", price=200.0)  # behind what was released
     result = replay(events + [late], QUIET, RULE, truth(500))
-    assert outcome(result, 500) == {"symbol": "A", "seq": 500, "sigmas": 10.0, "result": "missed",
+    assert outcome(result, 500) == {"symbol": "A", "seq": 500, "time": 0, "sigmas": 10.0, "result": "missed",
                                     "reason": "not released"}
 
 
