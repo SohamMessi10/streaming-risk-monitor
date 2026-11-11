@@ -2,13 +2,49 @@
 
 ## Status
 
-**Milestone 2 of 6 complete: rolling statistics.** Next: event time (the reorder buffer,
-watermark, and late and duplicate events). The plan is in [`docs/design.md`](docs/design.md); the
-accuracy measurements are in [`docs/numerics.md`](docs/numerics.md).
-
-Work happens on a branch per milestone, merged by pull request.
+**Milestone 3 of 6 complete: event time.** Next: alerts and the `replay` command. The plan is in
+[`docs/design.md`](docs/design.md); the accuracy measurements are in
+[`docs/numerics.md`](docs/numerics.md).
 
 ## Milestones
+
+### Milestone 3: event time
+
+- `engine.py`: per symbol, a buffer ordered by (time, seq) and a watermark (the latest event time
+  minus `lateness_ms`).
+  - Events are released *strictly* before the watermark, then turned into log returns and
+    rolling statistics. Each update records the window before and after its return.
+  - Late events (behind what was released, by time and seq) and duplicates are dropped and
+    counted, overall and per symbol.
+  - Sequence numbers are remembered for one window, so memory stays bounded.
+- **Measured on the default synthetic feed**, against its truth file:
+  - all 7,276 lines received;
+  - 76 duplicates dropped (76 injected);
+  - 9 late (exactly the 9 events delayed beyond the 2 s lateness);
+  - 7,191 released.
+  - Event-time lag is at least 2,001 ms, with a median of 2.7 s. The maximum of 64.5 s comes from
+    60-second gaps: a watermark moves only with new events, and the design notes the idle-timeout
+    remedy.
+- **Fixed while building:**
+  - The first duplicate memory forgot a sequence number as soon as its event was released. That
+    would have counted a quick duplicate as *late*, and it walked a queue in arrival order while
+    comparing event times. It is now a heap with one window of retention.
+  - A test assertion of mine ended in `or len(...) == len(...)`, a loophole that would pass any
+    output of the right length. It now compares exact keys.
+
+**Tests (92):**
+- *The key property* (Hypothesis): for any arrival order with delays within the lateness, the
+  output is identical, float for float, to the sorted run, and nothing is late.
+- *Batch agreement:* statistics match a from-scratch batch recomputation.
+- *Independence:* symbols never affect each other.
+- *Edge rules:* release strictly before the watermark; lateness by (time, seq), not time alone;
+  duplicates before and after release; bounded memory over 50,000 events.
+- *Real data:* the truth-file counts.
+
+**Mutation-checked:** 15 deliberate bugs in the engine. 14 were caught at once. The 15th, judging
+lateness by time alone, needed a test for a same-time event with a lower seq. All 15 are now
+caught.
+
 
 ### Milestone 2: rolling statistics
 
@@ -97,3 +133,5 @@ python scripts/numerics.py
 - Catastrophic cancellation; Welford's method and why removal is less stable; condition number
   (mean² / variance).
 - The corrected two-pass algorithm; subnormal numbers.
+- Watermarks, allowed lateness, and the latency they cost; why release is strictly before the
+  watermark; idle timeouts.
