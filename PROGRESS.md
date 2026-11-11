@@ -2,11 +2,74 @@
 
 ## Status
 
-**Milestone 3 of 6 complete: event time.** Next: alerts and the `replay` command. The plan is in
-[`docs/design.md`](docs/design.md); the accuracy measurements are in
-[`docs/numerics.md`](docs/numerics.md).
+**Milestone 4 of 6 complete: alerts and `riskmon replay`.** Next: the HTML dashboard. The plan
+is in [`docs/design.md`](docs/design.md). The measurements are in
+[`docs/numerics.md`](docs/numerics.md) (statistics) and [`docs/alerts.md`](docs/alerts.md)
+(alerts).
 
 ## Milestones
+
+### Milestone 4: alerts and replay
+
+- `alerts.py`: z-scores against the window *before* each return.
+  - An alert fires at |z| ≥ 5, with at least 30 returns in the window, and 30 s of event time
+    after the symbol's last fired alert.
+  - A return blocked only by the cooldown is counted as suppressed.
+  - Each alert records the return, mean, std, z and window size.
+- `replay.py` and `riskmon replay FEED [--report out.json]` give counts, alerts, event-time lag
+  and throughput.
+- **Scoring against the truth file.** Each injected jump is matched to the released return that
+  spans it, even when the jump's own event was dropped as late. It is then detected, or missed
+  with a reason: too few returns, cooldown, below threshold, no spread, or not released. Alerts
+  on no jump are false alerts.
+- **Default feed:**
+  - 19 of 20 jumps detected and 0 false alerts.
+  - The miss is the cooldown: two jumps on SYNB 21 s apart.
+  - Lag: median 2,716 ms, p99 6,939 ms.
+- **Measured by `scripts/alert_quality.py`** (written up in `docs/alerts.md`; synthetic data, so
+  it shows the rule finds what was injected, not how it would do on real prices):
+  - **False alerts against exact theory.** With a standard deviation estimated from n returns, z
+    is Student's t with n − 1 degrees of freedom times √(1 + 1/n). The expected count from that
+    matches the observed one: on about 2 million returns with no jumps, 178 / 20 / 1 alerts at
+    |z| ≥ 4 / 4.5 / 5, against 168.0 / 20.9 / 2.2 expected. The normal tail undercounts by a
+    quarter.
+  - **A finding:** a dropped late event makes the next return span two steps, √2 times wider.
+    Those returns are only 0.19% of all returns but produce 3 of the 5 false alerts at |z| ≥ 5.
+    Without them, the counts match theory again.
+  - **Detection by jump size** (2,106 jumps each): 0% at 3σ and 4σ, 34.5% at 5σ, 93.4% at 6σ,
+    94.0% at 8σ. Above 6σ the misses are the cooldown (about 5%) and jumps in a symbol's first 30
+    returns (0.7%).
+  - **Throughput**, single-threaded on a 2-vCPU cloud container with Python 3.13:
+    - 161k events/s for the engine and alerts on events in memory;
+    - 215k lines/s for strict parsing alone;
+    - 78k events/s for `riskmon replay` from a 200,000-line file.
+- **Fixed while building:**
+  - **p99 was off by one.** It took the ⌊0.99 n⌋-th index, giving the maximum for 100 values; it
+    is now the nearest rank.
+  - **Two of my tests had wrong expectations:** release is strict, so 3 events, not 2, wait for
+    the flush; and alerts from two arrival orders must be compared per symbol.
+  - **The t-tail function's own check was wrong at first.** I compared it with the normal tail at
+    10⁷ degrees of freedom, where the true difference (1.7 × 10⁻⁵) exceeded my tolerance. At
+    10¹⁰, `lgamma` cancellation took over. It is now checked against exact closed forms over the
+    range the replay uses.
+
+**Tests (143):**
+- The alert rule's every boundary: threshold, min count, cooldown, a suppressed alert not
+  extending the cooldown, per-symbol cooldowns, and the window before versus after.
+- Scoring: a late jump covered by the next return, every miss reason, precision and recall,
+  per-symbol scoring, alerts independent of arrival order within the lateness, and the default
+  feed pinned.
+- The `replay` command: settings, truth files (found, named, refused, malformed, not
+  synthetic), bad feeds and unwritable reports.
+
+**Mutation-checked:** 22 deliberate bugs in the alerts, replay and command. 19 were caught at
+once. The 3 survivors were test gaps:
+- p99, which hid the off-by-one above;
+- precision, where my first new test had equal jump and alert counts, so the wrong formula gave
+  the same answer;
+- a truth file not marked synthetic.
+
+Each now has a test, and all 22 are caught.
 
 ### Milestone 3: event time
 
@@ -122,7 +185,9 @@ python -m pip install -e ".[dev]"
 python -m ruff check src tests scripts
 python -m pytest
 riskmon generate out/feed.jsonl
+riskmon replay out/feed.jsonl --report out/report.json
 python scripts/numerics.py
+python scripts/alert_quality.py
 ```
 
 ## Concepts to review
@@ -135,3 +200,5 @@ python scripts/numerics.py
 - The corrected two-pass algorithm; subnormal numbers.
 - Watermarks, allowed lateness, and the latency they cost; why release is strictly before the
   watermark; idle timeouts.
+- z-scores against an estimated standard deviation: Student's t and the prediction interval;
+  precision versus recall; what a cooldown trades; nearest-rank percentiles.
