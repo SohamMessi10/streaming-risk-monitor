@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tool caches
+.pytest_cache/
+.hypothesis/
+.coverage
+htmlcov/
+
+# Generated feeds, reports and dashboards (examples are made by `riskmon generate`)
+out/
+
+# Secrets and local config
+.env
+
+# macOS
+.DS_Store
