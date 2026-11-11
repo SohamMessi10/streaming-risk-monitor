@@ -45,14 +45,24 @@ restarts. The feed is synthetic or a file you supply.
 |---|---|
 | Event time | When the price was observed, from the event's own timestamp |
 | Arrival order | The order events appear in the feed |
-| Watermark | The latest event time seen, minus the allowed lateness: the engine's promise that nothing earlier is still expected |
-| Late event | One whose event time is before the current watermark: dropped and counted, never silently merged |
-| Duplicate | Same symbol and sequence number as an event already accepted: dropped and counted |
+| Watermark | Per symbol: the latest event time seen, minus the allowed lateness |
+| Release | Buffered events go out in (time, seq) order once their time is *strictly* before the watermark |
+| Late event | One that sorts, by (time, seq), at or before something already released: it can't be placed correctly, so it is dropped and counted |
+| Duplicate | Same symbol and sequence number as an event accepted within the last window of event time: dropped and counted (an older copy is behind what was released, and counted as late) |
 
-Events wait in a per-symbol reorder buffer until the watermark passes them, then are processed in
-event-time order (ties by sequence number). So for any feed, the output equals the output on the
-same accepted events sorted by event time. The price of that guarantee is latency: a result is
-emitted `allowed_lateness` after its event. The dashboard reports that delay.
+**The guarantee:** an event delayed by at most the allowed lateness is never late. So for any
+feed whose delays stay within it, the output equals the output on the same events sorted by
+(time, seq), float for float (a property test checks it). Releasing *strictly* before the
+watermark is what makes this hold. Releasing at the watermark itself could put out a same-time
+event with a higher seq before a lower one, delayed by exactly the lateness, arrived.
+
+**The cost is latency:** a result comes out more than `allowed_lateness` after its event (measured
+on the default feed: at least 2,001 ms for a 2,000 ms lateness, median 2.7 s).
+
+**A limitation:** a symbol's watermark moves only when that symbol has a new event, so after a gap
+its last events wait for the next one (the default feed has 60-second gaps, giving lags up to
+64.5 s). Production systems add an idle timeout that advances the watermark by wall-clock time;
+here the end of the feed flushes everything.
 
 ## Statistics
 
