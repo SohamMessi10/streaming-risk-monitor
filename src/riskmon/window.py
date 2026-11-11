@@ -17,6 +17,14 @@ from the values it holds (`math.fsum`, two passes). That bounds the drift at the
 pass over the window now and then; how much drift there is without it is measured in
 docs/numerics.md, not assumed.
 
+Rounding residue is the other risk. After a removal, values that are all equal can be left
+with a variance of, say, 2e-28 instead of 0 (Hypothesis found this). Harmless on its own, but an
+alert divides by the standard deviation: a residue of 1e-14 would turn any small return into a
+z-score of millions. So the window keeps a bound on the rounding error its updates could have
+introduced (`_noise`), and when the variance is positive but within that bound, `stats()`
+recomputes exactly before answering. Exactly-equal values never trigger it: Welford's updates
+leave them at exactly 0.
+
 `reference_stats` is the same calculation from scratch, used as the reference in tests.
 """
 
@@ -27,6 +35,9 @@ from collections import deque
 from dataclasses import dataclass
 
 DEFAULT_REBUILD_EVERY = 1_000
+# Rounding error each add or remove can leave in m2, as a multiple of eps * (value^2 + mean^2):
+# generous, since a bound that is too small would let residue through.
+_NOISE_PER_UPDATE = 16 * 2.0 ** -52
 
 
 @dataclass(frozen=True)
@@ -78,6 +89,7 @@ class RollingStats:
         self._mean = 0.0
         self._m2 = 0.0
         self._removals = 0
+        self._noise = 0.0  # a bound on the rounding error in m2 since the last exact rebuild
         self._now: int | None = None
         self.rebuilds = 0
 
@@ -95,6 +107,8 @@ class RollingStats:
         n = len(self._values)
         if n == 0:
             return Stats(0, None, None)
+        if n > 1 and 0.0 < self._m2 <= self._noise:
+            self.rebuild()  # the variance could be all rounding residue: recompute it exactly
         return Stats(n, self._mean, self._m2 / (n - 1) if n > 1 else None)
 
     def advance(self, now: int) -> None:
@@ -116,15 +130,17 @@ class RollingStats:
         delta = value - self._mean
         self._mean += delta / n
         self._m2 += delta * (value - self._mean)
+        self._noise += _NOISE_PER_UPDATE * (value * value + self._mean * self._mean)
 
     def _remove(self, value: float) -> None:
         n = len(self._values)  # the value has already left the deque
         if n == 0:
-            self._mean, self._m2 = 0.0, 0.0
+            self._mean, self._m2, self._noise = 0.0, 0.0, 0.0
         else:
             delta = value - self._mean
             self._mean -= delta / n
             self._m2 -= delta * (value - self._mean)
+            self._noise += _NOISE_PER_UPDATE * (value * value + self._mean * self._mean)
             if self._m2 < 0.0:  # rounding can leave a tiny negative; a variance can't be
                 self._m2 = 0.0
         self._removals += 1
@@ -138,4 +154,5 @@ class RollingStats:
             self._mean, self._m2 = 0.0, 0.0
         else:
             self._mean, self._m2 = _mean_and_m2(values)
+        self._noise = 0.0  # exact now, up to the reference's own rounding
         self.rebuilds += 1

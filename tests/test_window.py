@@ -130,6 +130,9 @@ def test_streaming_statistics_equal_the_reference_after_every_value(stream):
         assert w.values() == expected
         history = max(abs(x) for _, x in seen)
         assert close(w.stats(), reference_stats(expected), history), (w.stats(), reference_stats(expected))
+        if len(set(expected)) == 1 and len(expected) > 1:
+            # what alerts rely on: equal values have no spread, not a rounding residue of one
+            assert w.stats().variance == 0.0, w.stats()
 
 
 def test_the_textbook_formula_goes_negative_where_welford_does_not():
@@ -143,6 +146,15 @@ def test_the_textbook_formula_goes_negative_where_welford_does_not():
     ref = reference_stats(values)
     assert textbook < 0 < ref.variance
     assert abs(w.stats().variance - ref.variance) / ref.variance < 1e-7
+
+
+def test_values_left_equal_after_a_removal_have_exactly_zero_variance():
+    """The case Hypothesis found: residue of 2e-28 would make any small return look like a
+    z-score of millions."""
+    w = RollingStats(window_ms=2, rebuild_every=None)
+    for t, x in [(0, 1.169463931534942e-06), (0, 0.0), (0, 0.0), (1, 0.0), (1, 0.0), (2, 0.0)]:
+        w.add(t, x)
+    assert w.values() == [0.0, 0.0, 0.0] and w.stats().variance == 0.0
 
 
 def test_rebuilding_bounds_the_drift():
@@ -160,3 +172,13 @@ def test_rebuilding_bounds_the_drift():
         return error
     assert worst(1_000) * 10 < worst(None)
 
+
+def test_the_residue_guard_costs_nothing_for_centred_values():
+    """Returns sit near zero, so reading the statistics after every update never triggers an
+    exact recompute beyond the scheduled rebuilds (docs/numerics.md)."""
+    rng = random.Random(3)
+    w = RollingStats(window_ms=1_000)
+    for t in range(21_000):
+        w.add(t, rng.gauss(0, 5e-4))
+        w.stats()
+    assert w.rebuilds == (21_000 - 1_000) // 1_000
