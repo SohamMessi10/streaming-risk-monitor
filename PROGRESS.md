@@ -2,12 +2,40 @@
 
 ## Status
 
-**Milestone 5 of 6 complete: the HTML dashboard.** Next: README, results and the final audit. The plan
+**All 6 milestones complete.** The [README](README.md) summarizes the project and its measured results. The plan
 is in [`docs/design.md`](docs/design.md). The measurements are in
 [`docs/numerics.md`](docs/numerics.md) (statistics) and [`docs/alerts.md`](docs/alerts.md)
 (alerts).
 
 ## Milestones
+
+### Milestone 6: README and final audit
+
+- **README:** a dashboard screenshot (taken with Playwright), the measured results, quickstart,
+  commands, an architecture diagram (Mermaid, checked by rendering it with the Mermaid CLI),
+  how correctness is checked, design decisions and limitations.
+- **Fresh-clone audit.**
+  - Cloned from GitHub into new virtual environments. On 3.13 with the dev extras: lint, tests,
+    and every documented command.
+  - On 3.12 as a regular (non-editable) install, run from outside the repository: it works with
+    no third-party packages.
+- **Found in the code review, and fixed: lag memory grew with the feed.** The replay kept every
+  event's lag in a list just to report the median and p99.
+  - It now counts lags per distinct millisecond, which gives the same statistics exactly. A
+    Hypothesis property compares them with the list-based ones, types included.
+  - Peak traced memory replaying a 200,000-line feed went from 12.0 to 3.4 MiB, and for
+    1,000,000 lines from 53.3 to 5.0 MiB. What remains grows with alerts and jumps, not events.
+  - My first version used `Counter`, whose `+=` is slow enough to cost 4–6% throughput head to
+    head with `main`. A plain `dict` shows no measurable difference (146–149k events/s either
+    way).
+- **Throughput figures re-measured** for the README: about 145k events/s in memory and 69k from a
+  file. The earlier 156k came from a quieter moment on this shared container; runs vary by about
+  10%.
+
+**Tests (183)**, the same suite plus the lag-count property.
+
+**Mutation-checked:** 5 deliberate bugs in the lag statistics. 4 were caught. The 5th was a
+mutant I built badly: it computed the smallest lag another way, giving the same value.
 
 ### Milestone 5: the dashboard
 
@@ -239,6 +267,7 @@ python -m pytest
 riskmon generate out/feed.jsonl
 riskmon replay out/feed.jsonl --report out/report.json --dashboard out/dashboard.html
 riskmon dashboard out/report.json out/dashboard.html
+pip install . && riskmon --version        # a regular install, from outside the repository
 python scripts/numerics.py
 python scripts/alert_quality.py
 ```
