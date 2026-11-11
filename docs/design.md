@@ -57,7 +57,9 @@ watermark is what makes this hold. Releasing at the watermark itself could put o
 event with a higher seq before a lower one, delayed by exactly the lateness, arrived.
 
 **The cost is latency:** a result comes out more than `allowed_lateness` after its event (measured
-on the default feed: at least 2,001 ms for a 2,000 ms lateness, median 2.7 s).
+on the default feed: at least 2,001 ms for a 2,000 ms lateness, median 2.7 s). The replay reports
+the lag's min, median, p99 and max exactly, from a count per distinct millisecond rather than a
+list of every lag, so its memory doesn't grow with the feed.
 
 **A limitation:** a symbol's watermark moves only when that symbol has a new event, so after a gap
 its last events wait for the next one (the default feed has 60-second gaps, giving lags up to
