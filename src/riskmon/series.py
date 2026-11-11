@@ -62,8 +62,15 @@ class Downsampler:
             raise ValueError(f"time went backwards ({time} after {self.buckets[-1].time})")
         index = (time - self.origin) // self.width
         last = self.buckets[-1] if self.buckets else None
-        if last is not None and last.index == index:
-            last.merge(Bucket(index, time, price, price, price, std, 1))
+        if last is not None and last.index == index:   # the common case: update in place
+            if price < last.low:
+                last.low = price
+            elif price > last.high:
+                last.high = price
+            last.last = price
+            if std is not None:
+                last.std = std
+            last.count += 1
             return
         self.buckets.append(Bucket(index, time, price, price, price, std, 1))
         while len(self.buckets) > self.max_points:
