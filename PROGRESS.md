@@ -83,7 +83,7 @@ mistake). The other 3 were test gaps, each now with a test:
 
 ```
 python -m pip install -e ".[dev]"
-python -m ruff check src tests
+python -m ruff check src tests scripts
 python -m pytest
 riskmon generate out/feed.jsonl
 python scripts/numerics.py
