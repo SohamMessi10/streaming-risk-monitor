@@ -1,4 +1,4 @@
-"""Command line: `riskmon generate` and `riskmon replay`.
+"""Command line: `riskmon generate`, `riskmon replay` and `riskmon dashboard`.
 
 Exit codes: 0 success; 1 something couldn't be done (an unreadable feed, a file that can't be
 written); 2 wrong command usage.
@@ -34,6 +34,7 @@ def build_parser() -> argparse.ArgumentParser:
     rep = commands.add_parser("replay", help="run a feed through the event-time engine and the alert rule")
     rep.add_argument("feed", type=Path, help="a JSON Lines feed, e.g. out/feed.jsonl")
     rep.add_argument("--report", type=Path, help="write the full report (JSON) here")
+    rep.add_argument("--dashboard", type=Path, help="write a static HTML dashboard here")
     truth = rep.add_mutually_exclusive_group()
     truth.add_argument("--truth", type=Path, help="score alerts against this truth file (default: FEED's "
                        "<name>.truth.json, when it exists)")
@@ -43,7 +44,21 @@ def build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--threshold", type=float, default=5.0, help="|z| that fires an alert (default 5)")
     rep.add_argument("--min-count", type=int, default=30, help="returns the window needs first (default 30)")
     rep.add_argument("--cooldown-ms", type=int, default=30_000, help="quiet time after an alert (default 30,000)")
+
+    dash = commands.add_parser("dashboard", help="render a saved replay report as a static HTML dashboard")
+    dash.add_argument("report", type=Path, help="a report written by `riskmon replay --report`")
+    dash.add_argument("output", type=Path, help="the HTML file to write")
     return parser
+
+
+def _write(path: Path, text: str) -> bool:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+        return True
+    except OSError as exc:
+        print(f"riskmon: can't write {path} ({exc.strerror})", file=sys.stderr)
+        return False
 
 
 def generate_command(args) -> int:
@@ -115,17 +130,41 @@ def replay_command(args) -> int:
     except FeedError as exc:
         print(f"riskmon: {exc}", file=sys.stderr)
         return EXIT_FAILED
-    report = result.report(synthetic)
-    if args.report is not None:
-        try:
-            args.report.parent.mkdir(parents=True, exist_ok=True)
-            args.report.write_text(json.dumps(report, indent=1) + "\n", encoding="utf-8")
-        except OSError as exc:
-            print(f"riskmon: can't write {args.report} ({exc.strerror})", file=sys.stderr)
+    report = {"feed": str(args.feed), **result.report(synthetic)}
+    if args.report is not None and not _write(args.report, json.dumps(report, indent=1) + "\n"):
+        return EXIT_FAILED
+    if args.dashboard is not None:
+        from riskmon.dashboard import render
+
+        if not _write(args.dashboard, render(report)):
             return EXIT_FAILED
     _print_summary(args.feed, report, truth_file)
     if args.report is not None:
         print(f"report: {args.report}")
+    if args.dashboard is not None:
+        print(f"dashboard: {args.dashboard}")
+    return EXIT_OK
+
+
+def dashboard_command(args) -> int:
+    from riskmon.dashboard import render
+
+    try:
+        report = json.loads(args.report.read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"riskmon: {args.report} can't be read ({exc.strerror})", file=sys.stderr)
+        return EXIT_FAILED
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        print(f"riskmon: {args.report} isn't a JSON report", file=sys.stderr)
+        return EXIT_FAILED
+    try:
+        page = render(report)
+    except (KeyError, TypeError, ValueError, AttributeError, IndexError):
+        print(f"riskmon: {args.report} isn't a report from `riskmon replay --report`", file=sys.stderr)
+        return EXIT_FAILED
+    if not _write(args.output, page):
+        return EXIT_FAILED
+    print(f"dashboard: {args.output}")
     return EXIT_OK
 
 
@@ -151,6 +190,8 @@ def run(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "replay":
         return replay_command(args)
+    if args.command == "dashboard":
+        return dashboard_command(args)
     return generate_command(args)
 
 

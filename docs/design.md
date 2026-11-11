@@ -89,6 +89,29 @@ With a truth file, `riskmon replay` scores alerts against the injected jumps (de
 with a reason, false alerts). [`docs/alerts.md`](alerts.md) measures false alerts against exact
 Student-t theory and detection by jump size.
 
+## Dashboard
+
+`riskmon replay FEED --dashboard out.html` (or `riskmon dashboard REPORT out.html` from a saved
+report) writes one self-contained HTML file. It uses inline SVG and no scripts: a
+Content-Security-Policy forbids scripts and network loads, and every string from the feed or
+the command line is escaped.
+
+- **Charts.** Per symbol, a price chart (the last price with each interval's low–high band, alerts
+  as triangles pointing the way the price moved, missed jumps along the top) and, under it, the
+  rolling standard deviation. They are two charts, never one with two y-axes.
+- **Hover and tables.** Hover titles give the numbers behind each mark, and tables list every
+  alert, missed jump and count, so nothing is shown only by colour or position.
+- **Phones.** Each chart is drawn twice, at desktop and phone widths; a media query picks one, so
+  axis text stays readable without scripts.
+
+**Bounded memory.** A replay can be millions of events, so the report keeps at most 600 points per
+symbol.
+- Buckets are fixed-width time intervals aligned to the first event. When there are too many, the
+  width doubles and neighbours merge in pairs. That gives exactly what bucketing every price at
+  the final width would have (a property test checks it), without knowing the feed's length in
+  advance.
+- A missing bucket breaks the line: there were no events there.
+
 ## Architecture
 
 ```

@@ -134,3 +134,48 @@ def test_replay_reports_a_report_it_cannot_write(tmp_path, capsys):
     (tmp_path / "blocker").write_text("a file, not a folder")
     assert main(["replay", str(path), "--report", str(tmp_path / "blocker" / "r.json")]) == 1
     assert "can't write" in capsys.readouterr().err
+
+
+# --- dashboard ----------------------------------------------------------------------------------
+
+def test_replay_writes_a_dashboard(tmp_path, capsys):
+    path = feed(tmp_path)
+    capsys.readouterr()
+    assert main(["replay", str(path), "--dashboard", str(tmp_path / "site" / "d.html")]) == 0
+    assert f"dashboard: {tmp_path / 'site' / 'd.html'}" in capsys.readouterr().out
+    page = (tmp_path / "site" / "d.html").read_text()
+    assert page.startswith("<!doctype html>") and f"Replay of {path}" in page
+
+
+def test_a_saved_report_renders_the_same_dashboard(tmp_path, capsys):
+    path = feed(tmp_path)
+    assert main(["replay", str(path), "--report", str(tmp_path / "r.json"), "--dashboard", str(tmp_path / "a.html")]) == 0
+    capsys.readouterr()
+    assert main(["dashboard", str(tmp_path / "r.json"), str(tmp_path / "b.html")]) == 0
+    assert capsys.readouterr().out == f"dashboard: {tmp_path / 'b.html'}\n"
+    assert (tmp_path / "a.html").read_text() == (tmp_path / "b.html").read_text()
+
+
+@pytest.mark.parametrize("content, message", [
+    (None, "can't be read"),
+    ("{not json", "isn't a JSON report"),
+    ('{"counts": {}}', "isn't a report from `riskmon replay --report`"),
+    ("[1, 2, 3]", "isn't a report from `riskmon replay --report`"),
+])
+def test_dashboard_refuses_what_is_not_a_report(tmp_path, capsys, content, message):
+    report = tmp_path / "r.json"
+    if content is not None:
+        report.write_text(content)
+    assert main(["dashboard", str(report), str(tmp_path / "d.html")]) == 1
+    assert message in capsys.readouterr().err
+    assert not (tmp_path / "d.html").exists()
+
+
+def test_dashboards_report_a_file_they_cannot_write(tmp_path, capsys):
+    path = feed(tmp_path)
+    (tmp_path / "blocker").write_text("a file, not a folder")
+    assert main(["replay", str(path), "--dashboard", str(tmp_path / "blocker" / "d.html")]) == 1
+    assert "can't write" in capsys.readouterr().err
+    assert main(["replay", str(path), "--report", str(tmp_path / "r.json")]) == 0
+    assert main(["dashboard", str(tmp_path / "r.json"), str(tmp_path / "blocker" / "d.html")]) == 1
+    assert "can't write" in capsys.readouterr().err

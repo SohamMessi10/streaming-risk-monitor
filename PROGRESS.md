@@ -2,12 +2,64 @@
 
 ## Status
 
-**Milestone 4 of 6 complete: alerts and `riskmon replay`.** Next: the HTML dashboard. The plan
+**Milestone 5 of 6 complete: the HTML dashboard.** Next: README, results and the final audit. The plan
 is in [`docs/design.md`](docs/design.md). The measurements are in
 [`docs/numerics.md`](docs/numerics.md) (statistics) and [`docs/alerts.md`](docs/alerts.md)
 (alerts).
 
 ## Milestones
+
+### Milestone 5: the dashboard
+
+- `riskmon replay FEED --dashboard out.html`, or `riskmon dashboard REPORT out.html` from a
+  saved report, writes one self-contained HTML file. It uses inline SVG, no scripts, and a
+  Content-Security-Policy forbidding scripts and network loads.
+  - **Headline numbers:** counts, alerts, jumps detected, and lag.
+  - **Per symbol:** a price chart with each interval's low–high band, alerts as triangles pointing
+    the way the price moved, and missed jumps marked along the top; under it, the rolling standard
+    deviation. They are two charts, never two y-axes.
+  - **Tables** of alerts (hit or false), missed jumps with reasons, and per-symbol counts.
+  - **Hover titles** give the numbers behind every mark.
+- `series.py`: at most 600 points per symbol, in memory that doesn't grow with the feed.
+  - Time buckets aligned to the first event double in width and merge in pairs when there are too
+    many. A property test checks this equals bucketing every price at the final width.
+  - A missing bucket breaks the line, since there were no events there.
+- **Checked in a browser** (Playwright, Chromium) at 1280 px in light and dark mode and at 390 px
+  (phone): no console errors, no failed requests, and no sideways page scroll.
+  - At first the phone layout scrolled each chart inside its card, with half the chart hidden.
+    Each chart is now drawn at two widths and a media query picks one.
+- **Chart colours** (series blue, critical red) pass the palette validator in both modes: contrast
+  of at least 3:1 and colour-blind separation ΔE of at least 23.8. Alerts carry a shape and a
+  table row as well as colour.
+- **Measured:**
+  - The default feed's dashboard is 130 KB; a 200,000-event, 10-symbol replay's is 727 KB.
+  - Keeping the series first cost about 1 µs per event (161k → 139k events/s in memory).
+    Updating the current bucket in place, instead of merging a new one, brought it to 156k.
+    `riskmon replay` from the 200,000-line file runs at about 70k events/s.
+- **Fixed while building:**
+  - The price axis ended short of round values, so only two ticks showed. The axis now starts and
+    ends on ticks.
+  - Symbols were listed in the order their first price came out; they are now sorted by name.
+  - The note under the missed jumps started in lower case, and "1 missed jumps" is now singular.
+  - **Four of my test expectations were wrong:** a "no URLs" check that matched `http-equiv`; two
+    regexes that missed the left-aligned time column; and 15-minute ticks where six 10-minute
+    ticks cover an hour.
+
+**Tests (182):**
+- *The downsampler:* Hypothesis properties against direct bucketing and the smallest width that
+  fits; bounded memory over 200,000 prices; time going backwards refused.
+- *The page:* well-formed HTML with no scripts, URLs or event attributes; hostile feed names and
+  symbols escaped; every alert drawn on both widths and listed in the table; triangle direction;
+  lines breaking at gaps; the axis ending on ticks; the false-alert label; an empty replay; a
+  single price; long tables cut with a note; symbol order.
+- *The commands:* the same page from a live replay and a saved report; bad reports refused;
+  unwritable outputs.
+
+**Mutation-checked:** 20 deliberate bugs in the downsampler and dashboard. 13 were caught at
+once and 7 survived:
+- 6 were test gaps: line breaks at gaps, triangle direction, the false-alert label, plurals, the
+  axis domain, and the settings line. Each now has a test.
+- 1 was equivalent: a reset that the bucket-index check already made redundant, so I removed it.
 
 ### Milestone 4: alerts and replay
 
@@ -185,7 +237,8 @@ python -m pip install -e ".[dev]"
 python -m ruff check src tests scripts
 python -m pytest
 riskmon generate out/feed.jsonl
-riskmon replay out/feed.jsonl --report out/report.json
+riskmon replay out/feed.jsonl --report out/report.json --dashboard out/dashboard.html
+riskmon dashboard out/report.json out/dashboard.html
 python scripts/numerics.py
 python scripts/alert_quality.py
 ```
@@ -202,3 +255,5 @@ python scripts/alert_quality.py
   watermark; idle timeouts.
 - z-scores against an estimated standard deviation: Student's t and the prediction interval;
   precision versus recall; what a cooldown trades; nearest-rank percentiles.
+- Downsampling a stream into bounded memory (doubling bucket widths); why a dashboard needs no
+  JavaScript; Content-Security-Policy; escaping untrusted text into HTML.

@@ -27,6 +27,7 @@ from dataclasses import asdict, dataclass, field
 from riskmon.alerts import Alert, Alerter, AlertRule, z_score
 from riskmon.engine import Engine, Settings, Update
 from riskmon.events import Event
+from riskmon.series import DEFAULT_POINTS, Downsampler
 
 
 @dataclass
@@ -35,6 +36,7 @@ class _Scoring:
 
     seqs: list[int]
     sigmas: dict[int, float]
+    times: dict[int, int]
     outcome: dict[int, dict] = field(default_factory=dict)
 
 
@@ -50,6 +52,7 @@ class Result:
     seconds: float
     jumps: dict[str, _Scoring] | None
     false_alerts: list[Alert]
+    series: dict[str, Downsampler]
 
     def report(self, synthetic: bool | None = None) -> dict:
         counts = asdict(self.engine.counts)
@@ -67,6 +70,7 @@ class Result:
                        "list": [a.to_dict() for a in self.alerts]},
             "lag_ms": _lag_summary(self.lags, self.flushed),
             "evaluation": self._evaluation(),
+            "series": {symbol: sampler.to_dict() for symbol, sampler in self.series.items()},
             "timing": {"seconds": round(self.seconds, 4),
                        "events_per_second": round(counts["received"] / self.seconds) if self.seconds > 0 else None,
                        "note": "wall-clock on the machine that ran it, reading and parsing included"},
@@ -80,7 +84,8 @@ class Result:
         for symbol, scoring in self.jumps.items():
             for seq in scoring.seqs:
                 entry = scoring.outcome.get(seq, {"result": "missed", "reason": "not released"})
-                outcomes.append({"symbol": symbol, "seq": seq, "sigmas": scoring.sigmas[seq], **entry})
+                outcomes.append({"symbol": symbol, "seq": seq, "time": scoring.times[seq], "sigmas": scoring.sigmas[seq],
+                                 **entry})
         jumps = len(outcomes)
         detected = sum(1 for o in outcomes if o["result"] == "detected")
         hits = len(self.alerts) - len(self.false_alerts)
@@ -115,8 +120,9 @@ def _lag_summary(lags: list[int], flushed: int) -> dict:
 
 
 def replay(events: Iterable[Event], settings: Settings | None = None, rule: AlertRule | None = None,
-           jumps: list[dict] | None = None) -> Result:
-    """Run the feed (in arrival order) through the engine and the alert rule."""
+           jumps: list[dict] | None = None, series_points: int = DEFAULT_POINTS) -> Result:
+    """Run the feed (in arrival order) through the engine and the alert rule. Each symbol's prices
+    and rolling standard deviation are kept, downsampled to at most `series_points`, for charts."""
     settings = settings or Settings()
     rule = rule or AlertRule()
     engine = Engine(settings)
@@ -126,12 +132,18 @@ def replay(events: Iterable[Event], settings: Settings | None = None, rule: Aler
     alerts: list[Alert] = []
     false_alerts: list[Alert] = []
     lags: list[int] = []
+    series: dict[str, Downsampler] = {}
+    Downsampler(series_points)   # refuse a bad size before reading anything
 
     def handle(update: Update) -> None:
         suppressed_before = alerter.suppressed
         alert = alerter.observe(update)
         if alert is not None:
             alerts.append(alert)
+        sampler = series.get(update.symbol)
+        if sampler is None:
+            sampler = series[update.symbol] = Downsampler(series_points)
+        sampler.add(update.time, update.price, update.after.std)
         covered: list[int] = []
         start = previous_seq.get(update.symbol)
         previous_seq[update.symbol] = update.seq
@@ -155,15 +167,16 @@ def replay(events: Iterable[Event], settings: Settings | None = None, rule: Aler
     for update in final:
         handle(update)
     seconds = clock.perf_counter() - started
-    return Result(settings, rule, engine, alerter, alerts, lags, len(final), seconds, scoring, false_alerts)
+    return Result(settings, rule, engine, alerter, alerts, lags, len(final), seconds, scoring, false_alerts, series)
 
 
 def _scoring(jumps: list[dict]) -> dict[str, _Scoring]:
     out: dict[str, _Scoring] = {}
     for jump in jumps:
-        entry = out.setdefault(jump["symbol"], _Scoring([], {}))
+        entry = out.setdefault(jump["symbol"], _Scoring([], {}, {}))
         entry.seqs.append(jump["seq"])
         entry.sigmas[jump["seq"]] = jump["sigmas"]
+        entry.times[jump["seq"]] = jump.get("time")
     for entry in out.values():
         entry.seqs.sort()
     return out
