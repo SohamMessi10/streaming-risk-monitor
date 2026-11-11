@@ -1,4 +1,4 @@
-"""The event-time engine: reorders each symbol's events, drops late ones, and turns
+"""The event-time engine: reorders each symbol's events, drops late and duplicate ones, and turns
 the rest into returns and rolling statistics.
 
 For each symbol:
@@ -12,12 +12,17 @@ An event delayed by at most `lateness_ms` is never late. Releasing only *strictl
 watermark is what makes that true: releasing at the watermark itself could release a same-time
 event with a higher seq before one with a lower seq arrived.
 
+A **duplicate** repeats a (symbol, seq) already accepted: dropped and counted. Sequence numbers
+are remembered for `window_ms` of event time behind the symbol's latest event; a copy arriving
+after that is behind what was released anyway, and is counted as late.
+
 Each released event's log return (from the symbol's previous released price) goes into the
 symbol's RollingStats window. Each Update records the window's statistics just *before* the
 return was added, which is what an alert compares the return against, and just after.
 
-Memory per symbol is bounded: the buffer holds the events of about the last `lateness_ms`, and
-the window the returns of the last `window_ms`.
+Memory per symbol is bounded: the buffer holds the events of about the last `lateness_ms`, the
+window the returns of the last `window_ms`, and the remembered sequence numbers about the last
+`window_ms`.
 """
 
 from __future__ import annotations
@@ -66,6 +71,7 @@ class Update:
 class Counts:
     received: int = 0
     accepted: int = 0
+    duplicates: int = 0
     late: int = 0
     released: int = 0
 
@@ -77,6 +83,8 @@ class _Symbol:
     max_time: int | None = None
     last_released: tuple[int, int] | None = None                           # (time, seq)
     last_price: float | None = None
+    seen: set[int] = field(default_factory=set)                            # seqs remembered for duplicates
+    seen_order: list[tuple[int, int]] = field(default_factory=list)        # heap of (time, seq), to forget them
     counts: Counts = field(default_factory=Counts)
 
 
@@ -104,15 +112,24 @@ class Engine:
         """Events accepted but not yet released, across all symbols."""
         return sum(len(s.pending) for s in self._symbols.values())
 
+    def remembered(self) -> int:
+        """Sequence numbers held for duplicate detection, across all symbols."""
+        return sum(len(s.seen) for s in self._symbols.values())
+
     def push(self, event: Event) -> list[Update]:
         """Take one event in arrival order; return the updates it releases (possibly none)."""
         state = self._state(event.symbol)
         for counts in (self.counts, state.counts):
             counts.received += 1
+        if event.seq in state.seen:
+            self._count(state, "duplicates")
+            return []
         if state.last_released is not None and (event.time, event.seq) <= state.last_released:
             self._count(state, "late")
             return []
         self._count(state, "accepted")
+        state.seen.add(event.seq)
+        heapq.heappush(state.seen_order, (event.time, event.seq))
         heapq.heappush(state.pending, (event.time, event.seq, event.price))
         if state.max_time is None or event.time > state.max_time:
             state.max_time = event.time
@@ -144,4 +161,13 @@ class Engine:
             self._count(state, "released")
             updates.append(Update(symbol, time, seq, price, log_return, before, after,
                                   released_at=state.max_time))
+        self._forget(state)
         return updates
+
+    def _forget(self, state: _Symbol) -> None:
+        """Forget seqs more than `window_ms` of event time behind the symbol's latest event."""
+        if state.max_time is None:
+            return
+        horizon = state.max_time - self.settings.window_ms
+        while state.seen_order and state.seen_order[0][0] < horizon:
+            state.seen.discard(heapq.heappop(state.seen_order)[1])

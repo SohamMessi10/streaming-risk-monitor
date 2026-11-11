@@ -115,7 +115,7 @@ def test_any_arrival_order_within_the_lateness_gives_identical_results(feed, win
     settings = Settings(window_ms=window, lateness_ms=lateness, rebuild_every=None)
     engine, updates = run(arrived, settings)
     _, reference = run(sorted(in_order, key=lambda e: (e.time, e.seq)), settings)
-    assert engine.counts.late == 0
+    assert engine.counts.late == 0 and engine.counts.duplicates == 0
     per_symbol = lambda us: {s: [u for u in us if u.symbol == s] for s in ("A", "B")}  # noqa: E731
     got, want = per_symbol(updates), per_symbol(reference)
     for symbol in ("A", "B"):  # identical, float for float, apart from when each was released
@@ -163,6 +163,45 @@ def test_a_same_time_event_with_a_lower_seq_is_never_overtaken_within_the_latene
     engine.push(ev(1_000, 1))                        # delayed by exactly the lateness
     updates = engine.flush()
     assert engine.counts.late == 0 and [u.seq for u in updates] == [1, 2, 3]
+
+
+# --- duplicates and memory --------------------------------------------------------------------
+
+
+def test_duplicates_are_dropped_whether_still_buffered_or_already_released():
+    engine = Engine(Settings(window_ms=10_000, lateness_ms=1_000))
+    engine.push(ev(0, 0))
+    engine.push(ev(0, 0))                            # still buffered
+    engine.push(ev(5_000, 1))                        # releases seq 0
+    engine.push(ev(0, 0))                            # released, but remembered
+    assert (engine.counts.duplicates, engine.counts.late) == (2, 0)
+    engine.push(ev(20_000, 2))                       # seq 0 is now more than a window behind
+    engine.push(ev(0, 0))
+    assert (engine.counts.duplicates, engine.counts.late) == (2, 1)  # forgotten: behind, so late
+
+
+def test_memory_stays_bounded_on_a_long_feed():
+    settings = Settings(window_ms=60_000, lateness_ms=2_000)
+    feed, _ = generate(FeedSpec(symbols=("SYNA",), events_per_symbol=50_000, gap_rate=0))
+    engine = Engine(settings)
+    worst_buffer = worst_memory = 0
+    for event in feed:
+        engine.push(event)
+        worst_buffer = max(worst_buffer, engine.buffered())
+        worst_memory = max(worst_memory, engine.remembered())
+    # about one event a second: the buffer holds a few seconds' events, memory about a minute's
+    assert worst_buffer < 20 and worst_memory < 120
+
+
+def test_the_synthetic_feed_counts_match_its_truth_file():
+    feed, truth = generate(FeedSpec())
+    engine, updates = run(feed, Settings(lateness_ms=2_000))
+    late = sum(1 for d in truth.delayed if d["delay_ms"] > 2_000)
+    assert engine.counts.received == truth.lines
+    assert engine.counts.duplicates == len(truth.duplicates)
+    assert engine.counts.late == late == 9
+    assert engine.counts.released == len(updates) == truth.events - late
+    assert sum(engine.symbol_counts(s).released for s in engine.symbols()) == len(updates)
 
 
 def test_event_time_lag_is_more_than_the_lateness_until_the_end():
