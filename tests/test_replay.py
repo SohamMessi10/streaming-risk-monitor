@@ -8,7 +8,7 @@ from riskmon.alerts import AlertRule
 from riskmon.engine import Settings
 from riskmon.events import Event
 from riskmon.generate import FeedSpec, generate
-from riskmon.replay import replay
+from riskmon.replay import _lag_summary, replay
 
 QUIET = Settings(window_ms=10**9, lateness_ms=2_000)
 RULE = AlertRule(threshold=5.0, min_count=30, cooldown_ms=30_000)
@@ -106,6 +106,13 @@ def test_precision_and_recall_count_hits_and_false_alerts():
     ev = evaluation(result)
     assert (ev["jumps"], ev["detected"], ev["alerts_on_a_jump"], ev["false_alerts"]) == (3, 1, 1, 1)
     assert (ev["recall"], ev["precision"]) == (0.3333, 0.5)
+
+
+def test_p99_is_the_nearest_rank():
+    assert _lag_summary(list(range(1, 101)), 0)["p99"] == 99
+    assert _lag_summary(list(range(1_000, 0, -1)), 0)["p99"] == 990
+    assert _lag_summary([7], 0)["p99"] == 7
+    assert _lag_summary([1, 2], 0)["p99"] == 2
 
 
 def test_without_a_truth_file_there_is_no_evaluation():

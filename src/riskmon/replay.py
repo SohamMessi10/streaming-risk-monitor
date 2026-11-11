@@ -108,9 +108,10 @@ def _lag_summary(lags: list[int], flushed: int) -> dict:
     if not lags:
         return {"updates": 0, "flushed_at_end": flushed}
     ordered = sorted(lags)
-    return {"updates": len(ordered), "flushed_at_end": flushed, "min": ordered[0],
-            "median": statistics.median(ordered), "p99": ordered[min(len(ordered) - 1, (99 * len(ordered)) // 100)],
-            "max": ordered[-1]}
+    n = len(ordered)
+    p99 = ordered[(99 * n + 99) // 100 - 1]   # nearest rank: the ceil(0.99 n)-th smallest
+    return {"updates": n, "flushed_at_end": flushed, "min": ordered[0], "median": statistics.median(ordered),
+            "p99": p99, "max": ordered[-1]}
 
 
 def replay(events: Iterable[Event], settings: Settings | None = None, rule: AlertRule | None = None,
