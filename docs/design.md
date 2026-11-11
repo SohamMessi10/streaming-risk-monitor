@@ -78,11 +78,16 @@ here the end of the feed flushes everything.
 
 ## Alerts
 
-An alert fires when |z| = |return − mean| / std exceeds the threshold, with at least
-`min_count` returns in the window and std above zero, and not within `cooldown` (event time) of
-the symbol's previous alert. The z-score uses the window before the new return is added, so a
-jump isn't hidden by its own effect on the statistics. Each alert records the return, mean, std,
-z and window size, and is described as an observation to investigate, not a confirmed fault.
+An alert fires when |z| = |return − mean| / std reaches the threshold (default 5), with at least
+`min_count` returns in the window (30) and std above zero, and not within `cooldown` (30 s of
+event time) of the symbol's previous *fired* alert; one blocked only by the cooldown is counted as
+suppressed. The z-score uses the window before the new return is added, so a jump isn't hidden by
+its own effect on the statistics. Each alert records the return, mean, std, z and window size, and
+is described as an observation to investigate, not a confirmed fault.
+
+With a truth file, `riskmon replay` scores alerts against the injected jumps (detected, missed
+with a reason, false alerts). [`docs/alerts.md`](alerts.md) measures false alerts against exact
+Student-t theory and detection by jump size.
 
 ## Architecture
 
