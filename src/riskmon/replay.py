@@ -19,7 +19,6 @@ not how it would do on real prices, and the report says so.
 from __future__ import annotations
 
 import bisect
-import statistics
 import time as clock
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, field
@@ -47,7 +46,7 @@ class Result:
     engine: Engine
     alerter: Alerter
     alerts: list[Alert]
-    lags: list[int]                  # event-time lag of each update released before the end-of-feed flush
+    lags: dict[int, int]             # lag (ms) -> updates released with it, before the end-of-feed flush
     flushed: int                     # updates released by the flush
     seconds: float
     jumps: dict[str, _Scoring] | None
@@ -73,7 +72,8 @@ class Result:
             "series": {symbol: sampler.to_dict() for symbol, sampler in self.series.items()},
             "timing": {"seconds": round(self.seconds, 4),
                        "events_per_second": round(counts["received"] / self.seconds) if self.seconds > 0 else None,
-                       "note": "wall-clock on the machine that ran it, reading and parsing included"},
+                       "note": "wall-clock on the machine that ran it, including reading and parsing the "
+                               "feed when it comes from a file"},
         }
         return report
 
@@ -109,14 +109,30 @@ class Result:
         }
 
 
-def _lag_summary(lags: list[int], flushed: int) -> dict:
-    if not lags:
+def _lag_summary(lags: dict[int, int], flushed: int) -> dict:
+    """Min, median, p99 and max of the lags, exactly, from a count of each distinct lag.
+
+    Lags are whole milliseconds and take few distinct values (up to the longest gap in the feed),
+    so counting them keeps memory bounded however long the feed is, where a list of every lag
+    would grow with it. The median is the middle value, or the mean of the two middle values;
+    p99 is the nearest rank, the ceil(0.99 n)-th smallest.
+    """
+    n = sum(lags.values())
+    if n == 0:
         return {"updates": 0, "flushed_at_end": flushed}
-    ordered = sorted(lags)
-    n = len(ordered)
-    p99 = ordered[(99 * n + 99) // 100 - 1]   # nearest rank: the ceil(0.99 n)-th smallest
-    return {"updates": n, "flushed_at_end": flushed, "min": ordered[0], "median": statistics.median(ordered),
-            "p99": p99, "max": ordered[-1]}
+    values = sorted(lags)
+
+    def nth(rank: int) -> int:   # the rank-th smallest lag, counting from 1
+        seen = 0
+        for value in values:
+            seen += lags[value]
+            if seen >= rank:
+                return value
+        raise AssertionError("rank beyond the count")
+
+    middle = nth((n + 1) // 2) if n % 2 else (nth(n // 2) + nth(n // 2 + 1)) / 2
+    return {"updates": n, "flushed_at_end": flushed, "min": values[0], "median": middle,
+            "p99": nth((99 * n + 99) // 100), "max": values[-1]}
 
 
 def replay(events: Iterable[Event], settings: Settings | None = None, rule: AlertRule | None = None,
@@ -131,7 +147,7 @@ def replay(events: Iterable[Event], settings: Settings | None = None, rule: Aler
     previous_seq: dict[str, int] = {}
     alerts: list[Alert] = []
     false_alerts: list[Alert] = []
-    lags: list[int] = []
+    lags: dict[int, int] = {}
     series: dict[str, Downsampler] = {}
     Downsampler(series_points)   # refuse a bad size before reading anything
 
@@ -161,7 +177,8 @@ def replay(events: Iterable[Event], settings: Settings | None = None, rule: Aler
     started = clock.perf_counter()
     for event in events:
         for update in engine.push(event):
-            lags.append(update.released_at - update.time)
+            lag = update.released_at - update.time
+            lags[lag] = lags.get(lag, 0) + 1   # a plain dict: Counter's += costs more per event
             handle(update)
     final = engine.flush()
     for update in final:

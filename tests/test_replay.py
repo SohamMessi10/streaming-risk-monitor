@@ -1,8 +1,12 @@
 import json
 import math
 import random
+import statistics
+from collections import Counter
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from riskmon.alerts import AlertRule
 from riskmon.engine import Settings
@@ -109,10 +113,20 @@ def test_precision_and_recall_count_hits_and_false_alerts():
 
 
 def test_p99_is_the_nearest_rank():
-    assert _lag_summary(list(range(1, 101)), 0)["p99"] == 99
-    assert _lag_summary(list(range(1_000, 0, -1)), 0)["p99"] == 990
-    assert _lag_summary([7], 0)["p99"] == 7
-    assert _lag_summary([1, 2], 0)["p99"] == 2
+    assert _lag_summary(Counter(range(1, 101)), 0)["p99"] == 99
+    assert _lag_summary(Counter(range(1_000, 0, -1)), 0)["p99"] == 990
+    assert _lag_summary(Counter([7]), 0)["p99"] == 7
+    assert _lag_summary(Counter([1, 2]), 0)["p99"] == 2
+
+
+@given(st.lists(st.integers(0, 70_000), min_size=1, max_size=300))
+def test_lag_statistics_from_counts_equal_those_from_every_value(lags):
+    ordered = sorted(lags)
+    summary = _lag_summary(Counter(lags), 3)
+    assert summary == {"updates": len(lags), "flushed_at_end": 3, "min": ordered[0],
+                       "median": statistics.median(ordered), "p99": ordered[-(-99 * len(ordered) // 100) - 1],
+                       "max": ordered[-1]}
+    assert type(summary["median"]) is type(statistics.median(ordered))
 
 
 def test_without_a_truth_file_there_is_no_evaluation():
